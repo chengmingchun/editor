@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Nord Theme Base Styles */
+body {
+  @apply bg-nord-0 text-nord-4;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Glassmorphism Card */
+.glass-card {
+  @apply bg-nord-1/60 backdrop-blur-md border border-nord-2/50 rounded-xl;
+}
+
+/* Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-nord-0;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-nord-3 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-nord-4;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Gradient Text */
+.gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-nord-8 to-nord-9;
+}
