@@ -12,10 +12,25 @@ import {
   Bot,
   Loader2,
   Sparkles,
-  FolderOpen
+  FolderOpen,
+  BookOpen,
+  Settings
 } from 'lucide-vue-next';
+import ConfigModal from '../components/ConfigModal.vue';
+import RemoteTemplates from '../components/RemoteTemplates.vue';
 
-// ==================== State ====================
+interface AIConfig {
+  enabled: boolean;
+  apiUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+interface AppConfig {
+  ai: AIConfig;
+  remoteTemplateUrl: string;
+  uploadUrl: string;
+}
 
 const currentFile = ref('untitled');
 const docContent = ref('# 新文档\n\n在这里开始编写...');
@@ -26,8 +41,13 @@ const editorContainer = ref<HTMLElement | null>(null);
 const editor = ref<Editor | null>(null);
 const aiInput = ref('');
 const showAiPanel = ref(false);
-
-// ==================== Editor ====================
+const showConfigModal = ref(false);
+const showTemplateModal = ref(false);
+const config = ref<AppConfig>({
+  ai: { enabled: false, apiUrl: '', apiKey: '', model: 'gpt-4' },
+  remoteTemplateUrl: '',
+  uploadUrl: ''
+});
 
 const initEditor = () => {
   if (!editorContainer.value) return;
@@ -39,7 +59,7 @@ const initEditor = () => {
   editor.value = new Editor({
     el: editorContainer.value,
     height: '100%',
-    initialEditType: 'wysiwyg', // 纯所见即所得模式
+    initialEditType: 'wysiwyg',
     previewStyle: 'tab',
     initialValue: docContent.value,
     theme: 'light',
@@ -59,8 +79,6 @@ const initEditor = () => {
     }
   });
 };
-
-// ==================== Actions ====================
 
 const createNewDocument = () => {
   if (confirm('创建新文档？当前内容将丢失')) {
@@ -134,9 +152,13 @@ const loadDocument = async (filename: string) => {
   }
 };
 
-// ==================== AI PlantUML ====================
-
 const generatePlantUML = async () => {
+  if (!config.value?.ai?.enabled) {
+    alert('请先在设置中启用 AI 功能并配置 API');
+    showConfigModal.value = true;
+    return;
+  }
+  
   if (!aiInput.value.trim()) {
     alert('请输入需求描述');
     return;
@@ -144,12 +166,10 @@ const generatePlantUML = async () => {
   
   isGenerating.value = true;
   try {
-    // 调用后端 AI 接口生成 PlantUML
     const result = await invoke('generate_plantuml', { 
       description: aiInput.value 
     }) as string;
     
-    // 将生成的 PlantUML 插入到文档中
     const plantumlBlock = `\n\n## 自动生成图表\n\n\`\`\`plantuml\n${result}\n\`\`\`\n`;
     
     const currentContent = editor.value?.getMarkdown() || '';
@@ -164,45 +184,40 @@ const generatePlantUML = async () => {
     showAiPanel.value = false;
   } catch (err) {
     console.error(err);
-    // 演示模式：生成示例 PlantUML
-    const demoPlantUML = `@startuml
-!theme plain
-skinparam backgroundColor #FEFEFE
-
-actor 用户
-participant "前端界面" as UI
-participant "AI服务" as AI
-database "文档存储" as DB
-
-用户 -> UI: 输入需求描述
-UI -> AI: 调用生成接口
-AI -> AI: 分析需求
-AI -> UI: 返回PlantUML代码
-UI -> DB: 保存文档
-UI -> 用户: 显示生成结果
-
-@enduml`;
-    
-    const plantumlBlock = `\n\n## 自动生成图表\n\n\`\`\`plantuml\n${demoPlantUML}\n\`\`\`\n`;
-    
-    const currentContent = editor.value?.getMarkdown() || '';
-    const newContent = currentContent + plantumlBlock;
-    
-    docContent.value = newContent;
-    if (editor.value) {
-      editor.value.setMarkdown(newContent);
-    }
-    
-    aiInput.value = '';
-    showAiPanel.value = false;
+    alert('生成失败: ' + err);
   } finally {
     isGenerating.value = false;
   }
 };
 
-// ==================== Lifecycle ====================
+const onTemplateSelect = (template: any) => {
+  currentFile.value = template.name || 'untitled_template';
+  docContent.value = template.content || '';
+  if (editor.value) {
+    editor.value.setMarkdown(template.content || '');
+  }
+  showTemplateModal.value = false;
+};
+
+const loadConfig = () => {
+  const saved = localStorage.getItem('app-config');
+  if (saved) {
+    try {
+      config.value = JSON.parse(saved);
+    } catch (e) {
+      console.error('加载配置失败:', e);
+    }
+  }
+};
+
+watch(showConfigModal, (newVal) => {
+  if (!newVal) {
+    loadConfig();
+  }
+});
 
 onMounted(() => {
+  loadConfig();
   loadSavedFiles();
   nextTick(() => {
     initEditor();
@@ -219,9 +234,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
-    <!-- 左侧 Sidebar -->
     <aside class="w-64 bg-white border-r border-gray-200 flex flex-col flex-shrink-0 shadow-sm">
-      <!-- Logo -->
       <div class="p-4 border-b border-gray-200">
         <div class="flex items-center gap-2">
           <div class="bg-gradient-to-br from-blue-500 to-purple-600 p-2 rounded-lg">
@@ -234,7 +247,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 三个主要功能按钮 -->
       <div class="p-3 grid grid-cols-3 gap-2 border-b border-gray-200">
         <button 
           @click="createNewDocument"
@@ -265,17 +277,30 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <!-- AI PlantUML 生成 -->
+      <div class="p-3 border-b border-gray-200">
+        <button 
+          @click="showTemplateModal = true"
+          class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:opacity-90 transition-opacity"
+        >
+          <BookOpen :size="16" />
+          <span class="text-sm font-medium">模板库</span>
+        </button>
+      </div>
+
       <div class="p-3 border-b border-gray-200">
         <button 
           @click="showAiPanel = !showAiPanel"
-          class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90 transition-opacity"
+          :class="[
+            'w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg transition-opacity',
+            config.value?.ai?.enabled 
+              ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' 
+              : 'bg-gray-200 text-gray-500'
+          ]"
         >
           <Bot :size="16" />
           <span class="text-sm font-medium">AI 生成图表</span>
         </button>
         
-        <!-- AI 输入面板 -->
         <div v-if="showAiPanel" class="mt-2 space-y-2">
           <textarea 
             v-model="aiInput"
@@ -290,10 +315,12 @@ onBeforeUnmount(() => {
             <Loader2 v-if="isGenerating" :size="12" class="animate-spin" />
             <span>{{ isGenerating ? '生成中...' : '生成 PlantUML' }}</span>
           </button>
+          <p v-if="!config.value?.ai?.enabled" class="text-xs text-gray-500">
+            AI 功能未启用，点击 <button @click="showConfigModal = true" class="text-blue-600 underline">设置</button> 进行配置
+          </p>
         </div>
       </div>
 
-      <!-- 文件列表 -->
       <div class="flex-1 overflow-hidden flex flex-col">
         <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200">
           <span class="text-xs font-medium text-gray-500">文档列表</span>
@@ -321,11 +348,19 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+
+      <div class="p-3 border-t border-gray-200">
+        <button 
+          @click="showConfigModal = true"
+          class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+        >
+          <Settings :size="16" />
+          <span class="text-sm font-medium">设置</span>
+        </button>
+      </div>
     </aside>
 
-    <!-- 主编辑区 -->
     <main class="flex-1 flex flex-col bg-white min-w-0">
-      <!-- 顶部栏 -->
       <header class="h-12 border-b border-gray-200 flex items-center justify-between px-4 bg-white">
         <div class="flex items-center gap-2">
           <FolderOpen :size="16" class="text-gray-400" />
@@ -342,16 +377,26 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <!-- 编辑器 -->
       <div class="flex-1 overflow-hidden p-4">
         <div ref="editorContainer" class="h-full rounded-lg border border-gray-200 overflow-hidden" />
       </div>
     </main>
+
+    <ConfigModal 
+      :show="showConfigModal" 
+      @close="showConfigModal = false" 
+    />
+
+    <RemoteTemplates
+      :show="showTemplateModal"
+      :template-url="config?.remoteTemplateUrl || ''"
+      @close="showTemplateModal = false"
+      @select="onTemplateSelect"
+    />
   </div>
 </template>
 
 <style scoped>
-/* Toast UI Editor Light Theme Customization */
 :deep(.toastui-editor-defaultUI) {
   border: none;
 }
@@ -483,7 +528,6 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

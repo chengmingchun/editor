@@ -3,11 +3,10 @@ import { ref, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { 
   PenTool, 
-  Code2, 
-  BarChart3, 
   Settings,
   Sparkles
 } from 'lucide-vue-next';
+import ConfigModal from './components/ConfigModal.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -22,6 +21,8 @@ const navigate = (path: string) => {
   router.push(path);
 };
 
+const showConfigModal = ref(false);
+
 const isTauri = ref(false);
 onMounted(() => {
   isTauri.value = !!(window as any).__TAURI__;
@@ -30,9 +31,7 @@ onMounted(() => {
 
 <template>
   <div class="flex h-screen bg-gray-50 text-gray-800 font-sans overflow-hidden">
-    <!-- 全局侧边导航栏 -->
     <aside class="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 shadow-sm z-50">
-      <!-- Logo -->
       <div class="mb-6">
         <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl 
                     flex items-center justify-center shadow-lg">
@@ -40,45 +39,26 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Navigation -->
       <nav class="flex-1 flex flex-col gap-1 w-full px-2">
         <button 
-          @click="navigate('/design')"
+          @click="navigate('/editor')"
           :class="[
             'nav-item',
-            activeRoute === '/design' || activeRoute === '/' ? 'active' : ''
+            activeRoute === '/editor' || activeRoute === '/' ? 'active' : ''
           ]"
-          title="设计工作室"
+          title="编辑器"
         >
           <PenTool :size="20" />
         </button>
-
-        <button 
-          @click="navigate('/codehub')"
-          :class="['nav-item', activeRoute === '/codehub' ? 'active' : '']"
-          title="代码检视"
-        >
-          <Code2 :size="20" />
-        </button>
-
-        <button 
-          @click="navigate('/metrics')"
-          :class="['nav-item', activeRoute === '/metrics' ? 'active' : '']"
-          title="效能看板"
-        >
-          <BarChart3 :size="20" />
-        </button>
       </nav>
 
-      <!-- Footer -->
       <div class="mt-auto">
-        <button class="nav-item" title="设置">
+        <button @click="showConfigModal = true" class="nav-item" title="设置">
           <Settings :size="18" />
         </button>
       </div>
     </aside>
 
-    <!-- 主内容区 -->
     <main class="flex-1 overflow-hidden relative bg-gray-50">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">
@@ -88,6 +68,11 @@ onMounted(() => {
         </transition>
       </router-view>
     </main>
+
+    <ConfigModal 
+      :show="showConfigModal" 
+      @close="showConfigModal = false" 
+    />
   </div>
 </template>
 
@@ -102,7 +87,6 @@ onMounted(() => {
   @apply bg-blue-50 text-blue-600;
 }
 
-/* Page transition */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.15s ease, transform 0.15s ease;

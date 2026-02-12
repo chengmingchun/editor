@@ -1,17 +1,14 @@
-// Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{generate_handler, Manager, State, WindowBuilder, WindowUrl};
 
-// ==================== Data Structures ====================
-
-/// CodeReview 意见结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewComment {
     pub id: String,
@@ -19,11 +16,10 @@ pub struct ReviewComment {
     pub content: String,
     pub file_path: Option<String>,
     pub line_number: Option<u32>,
-    pub severity: String, // critical, warning, suggestion
+    pub severity: String,
     pub created_at: String,
 }
 
-/// RAG 处理后的 Review 数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RAGReviewPair {
     pub error_logic: String,
@@ -31,7 +27,6 @@ pub struct RAGReviewPair {
     pub source_comment: ReviewComment,
 }
 
-/// 效能指标数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricData {
     pub date: String,
@@ -42,7 +37,6 @@ pub struct MetricData {
     pub resolved_comments_count: u32,
 }
 
-/// 应用状态
 pub struct AppState {
     pub documents_dir: Mutex<PathBuf>,
     pub review_data: Mutex<Vec<ReviewComment>>,
@@ -56,7 +50,6 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("AI_Flow_Studio");
         
-        // 确保目录存在
         let _ = fs::create_dir_all(&documents_dir);
         
         Self {
@@ -68,9 +61,14 @@ impl AppState {
     }
 }
 
-// ==================== Document Commands ====================
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub content: String,
+}
 
-/// 保存文档到本地
 #[tauri::command]
 fn save_document(
     filename: String,
@@ -85,7 +83,6 @@ fn save_document(
     Ok(format!("文档已保存至: {}", file_path.display()))
 }
 
-/// 加载本地文档
 #[tauri::command]
 fn load_document(
     filename: String,
@@ -100,7 +97,6 @@ fn load_document(
     Ok(content)
 }
 
-/// 获取所有已保存的文档列表
 #[tauri::command]
 fn list_documents(state: State<AppState>) -> Result<Vec<String>, String> {
     let dir = state.documents_dir.lock().map_err(|e| e.to_string())?;
@@ -119,12 +115,9 @@ fn list_documents(state: State<AppState>) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
-// ==================== CodeHub Webview Commands ====================
-
-/// 创建 CodeHub Webview 窗口
 #[tauri::command]
 async fn open_codehub_window(app_handle: tauri::AppHandle, mr_url: String) -> Result<String, String> {
-    let window = WindowBuilder::new(
+    let _window = WindowBuilder::new(
         &app_handle,
         "codehub",
         WindowUrl::External(mr_url.parse().map_err(|e| format!("URL解析错误: {:?}", e))?),
@@ -138,7 +131,6 @@ async fn open_codehub_window(app_handle: tauri::AppHandle, mr_url: String) -> Re
     Ok("CodeHub 窗口已打开".to_string())
 }
 
-/// 关闭 CodeHub Webview 窗口
 #[tauri::command]
 async fn close_codehub_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app_handle.get_window("codehub") {
@@ -147,7 +139,6 @@ async fn close_codehub_window(app_handle: tauri::AppHandle) -> Result<(), String
     Ok(())
 }
 
-/// 从 Webview 抓取检视意见
 #[tauri::command]
 async fn capture_review_comments(
     app_handle: tauri::AppHandle,
@@ -155,14 +146,11 @@ async fn capture_review_comments(
 ) -> Result<Vec<ReviewComment>, String> {
     use tauri::Manager;
     
-    // 获取 CodeHub 窗口
     let window = app_handle.get_window("codehub").ok_or("CodeHub 窗口未打开")?;
     
-    // 创建一个一次性监听器来接收 JavaScript 发送的结果
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let tx = std::sync::Mutex::new(Some(tx));
     
-    // 设置事件监听器
     let app_handle_for_event = app_handle.clone();
     let _id = app_handle_for_event.listen_global("__capture_comments_result__", move |event| {
         if let Some(payload) = event.payload() {
@@ -172,7 +160,6 @@ async fn capture_review_comments(
         }
     });
     
-    // 执行 JavaScript 抓取评论并通过事件发送回 Rust
     let script = r#"
         (function() {
             const comments = [];
@@ -206,21 +193,18 @@ async fn capture_review_comments(
         .eval(script)
         .map_err(|e| format!("执行脚本失败: {}", e))?;
     
-    // 等待 JavaScript 发送结果（最多等待 5 秒）
     let result = rx.recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| "获取评论超时或失败")?;
 
     let comments: Vec<ReviewComment> = serde_json::from_str(&result)
         .map_err(|e| format!("解析评论失败: {}", e))?;
 
-    // 先获取结果，然后再 lock state 存储到应用状态
     let mut review_data = state.review_data.lock().map_err(|e| e.to_string())?;
     review_data.extend(comments.clone());
 
     Ok(comments)
 }
 
-/// 手动添加检视意见
 #[tauri::command]
 fn add_review_comment(
     comment: ReviewComment,
@@ -231,14 +215,12 @@ fn add_review_comment(
     Ok(())
 }
 
-/// 获取所有检视意见
 #[tauri::command]
 fn get_review_comments(state: State<AppState>) -> Result<Vec<ReviewComment>, String> {
     let review_data = state.review_data.lock().map_err(|e| e.to_string())?;
     Ok(review_data.clone())
 }
 
-/// 清空检视意见
 #[tauri::command]
 fn clear_review_comments(state: State<AppState>) -> Result<(), String> {
     let mut review_data = state.review_data.lock().map_err(|e| e.to_string())?;
@@ -246,9 +228,6 @@ fn clear_review_comments(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-// ==================== RAG Processing Commands ====================
-
-/// 处理检视意见为 RAG 格式
 #[tauri::command]
 fn process_rag_pairs(state: State<AppState>) -> Result<Vec<RAGReviewPair>, String> {
     let review_data = state.review_data.lock().map_err(|e| e.to_string())?;
@@ -257,7 +236,6 @@ fn process_rag_pairs(state: State<AppState>) -> Result<Vec<RAGReviewPair>, Strin
     rag_pairs.clear();
     
     for comment in review_data.iter() {
-        // 智能解析评论内容，提取错误逻辑和修复建议
         let (error_logic, fix_suggestion) = parse_comment_to_rag(&comment.content);
         
         rag_pairs.push(RAGReviewPair {
@@ -270,9 +248,7 @@ fn process_rag_pairs(state: State<AppState>) -> Result<Vec<RAGReviewPair>, Strin
     Ok(rag_pairs.clone())
 }
 
-/// 解析评论内容为 RAG 格式
 fn parse_comment_to_rag(content: &str) -> (String, String) {
-    // 简单的启发式解析逻辑
     let lines: Vec<&str> = content.lines().collect();
     
     let mut error_logic = String::new();
@@ -300,7 +276,6 @@ fn parse_comment_to_rag(content: &str) -> (String, String) {
         }
     }
     
-    // 如果没有明确的分隔，默认前半部分是错误描述
     if fix_suggestion.is_empty() && error_logic.len() > 50 {
         let mid = error_logic.len() / 2;
         let split_pos = error_logic[mid..].find(' ').map(|p| mid + p).unwrap_or(mid);
@@ -317,14 +292,12 @@ fn parse_comment_to_rag(content: &str) -> (String, String) {
     (error_logic, fix_suggestion)
 }
 
-/// 获取 RAG 对
 #[tauri::command]
 fn get_rag_pairs(state: State<AppState>) -> Result<Vec<RAGReviewPair>, String> {
     let rag_pairs = state.rag_pairs.lock().map_err(|e| e.to_string())?;
     Ok(rag_pairs.clone())
 }
 
-/// 导出 RAG 数据为 JSON
 #[tauri::command]
 fn export_rag_data(state: State<AppState>) -> Result<String, String> {
     let dir = state.documents_dir.lock().map_err(|e| e.to_string())?;
@@ -339,9 +312,6 @@ fn export_rag_data(state: State<AppState>) -> Result<String, String> {
     Ok(file_path.to_string_lossy().to_string())
 }
 
-// ==================== Metrics Commands ====================
-
-/// 添加效能指标
 #[tauri::command]
 fn add_metric(metric: MetricData, state: State<AppState>) -> Result<(), String> {
     let mut metrics = state.metrics.lock().map_err(|e| e.to_string())?;
@@ -349,14 +319,12 @@ fn add_metric(metric: MetricData, state: State<AppState>) -> Result<(), String> 
     Ok(())
 }
 
-/// 获取所有效能指标
 #[tauri::command]
 fn get_metrics(state: State<AppState>) -> Result<Vec<MetricData>, String> {
     let metrics = state.metrics.lock().map_err(|e| e.to_string())?;
     Ok(metrics.clone())
 }
 
-/// 获取效能统计摘要
 #[tauri::command]
 fn get_metrics_summary(state: State<AppState>) -> Result<HashMap<String, f64>, String> {
     let metrics = state.metrics.lock().map_err(|e| e.to_string())?;
@@ -404,7 +372,6 @@ fn get_metrics_summary(state: State<AppState>) -> Result<HashMap<String, f64>, S
     Ok(summary)
 }
 
-/// 清空效能数据
 #[tauri::command]
 fn clear_metrics(state: State<AppState>) -> Result<(), String> {
     let mut metrics = state.metrics.lock().map_err(|e| e.to_string())?;
@@ -412,68 +379,98 @@ fn clear_metrics(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-// ==================== Remote Template Commands ====================
+fn execute_curl_command(url: String, method: String, headers: Vec<(String, String)>, body: Option<String>) -> Result<String, String> {
+    let output = Command::new("curl")
+        .args(&[
+            "-s",
+            "-X", &method,
+            "-H", "Content-Type: application/json",
+            "-H", "Accept: application/json",
+        ])
+        .args(headers.into_iter().flat_map(|(k, v)| vec!["-H".to_string(), format!("{}: {}", k, v)]))
+        .args(if let Some(b) = &body {
+            vec!["-d".to_string(), b.clone()]
+        } else {
+            vec![]
+        })
+        .arg(&url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("执行 curl 命令失败: {}", e))?;
 
-/// 模板数据结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Template {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub content: String,
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    if !output.status.success() {
+        return Err(format!("curl 请求失败: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.to_string())
 }
 
-/// 从远程接口获取模板列表
 #[tauri::command]
-async fn fetch_remote_templates(url: String) -> Result<Vec<Template>, String> {
-    // 使用 reqwest 或其他 HTTP 客户端获取远程模板
-    // 这里先返回模拟数据用于演示
-    
-    // 模拟网络延迟
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
-    // 如果是特定 URL，返回演示模板
-    if url.contains("demo") || url.contains("example") {
-        let templates = vec![
-            Template {
-                id: "demo-api-design".to_string(),
-                name: "API 设计规范".to_string(),
-                description: "RESTful API 设计规范模板".to_string(),
-                content: "# API 设计规范\n\n## 设计原则\n1. 使用名词复数形式表示资源\n2. 使用 HTTP 方法表示操作类型\n3. 使用状态码表示请求结果".to_string(),
-            },
-            Template {
-                id: "demo-db-design".to_string(),
-                name: "数据库设计规范".to_string(),
-                description: "数据库表结构设计模板".to_string(),
-                content: "# 数据库设计规范\n\n## 命名规范\n- 表名：小写下划线，复数形式\n- 字段名：小写下划线\n- 索引名：idx_表名_字段名".to_string(),
-            },
-            Template {
-                id: "demo-prd-template".to_string(),
-                name: "PRD 文档模板".to_string(),
-                description: "产品需求文档标准模板".to_string(),
-                content: "# PRD 文档\n\n## 1. 背景\n描述项目背景和目标\n\n## 2. 需求描述\n详细描述功能需求\n\n## 3. 验收标准\n- [ ] 标准1\n- [ ] 标准2".to_string(),
-            },
-        ];
-        return Ok(templates);
+async fn fetch_templates_via_command(
+    url: String,
+    use_command_line: bool,
+) -> Result<String, String> {
+    if !use_command_line {
+        return Err("命令行模式已禁用".to_string());
     }
     
-    // 实际项目中，这里应该使用 HTTP 客户端获取远程数据
-    // 例如：
-    // let response = reqwest::get(&url).await.map_err(|e| e.to_string())?;
-    // let templates: Vec<Template> = response.json().await.map_err(|e| e.to_string())?;
-    
-    Err("暂不支持该地址，请使用包含 'demo' 或 'example' 的 URL 查看演示".to_string())
+    tokio::task::spawn_blocking(move || {
+        execute_curl_command(url, "GET".to_string(), vec![], None)
+    })
+    .await
+    .map_err(|e| format!("执行失败: {}", e))?
 }
 
-// ==================== AI PlantUML Commands ====================
+#[tauri::command]
+async fn test_api_connection(url: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        execute_curl_command(url, "GET".to_string(), vec![], None)
+    })
+    .await
+    .map_err(|e| format!("执行失败: {}", e))?
+    .map(|_| "success".to_string())
+}
 
-/// 根据描述生成 PlantUML 代码
+#[tauri::command]
+async fn call_ai_api(
+    api_url: String,
+    api_key: String,
+    model: String,
+    prompt: String,
+    temperature: f64,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let request_body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    });
+
+    let headers = vec![("Authorization".to_string(), format!("Bearer {}", api_key))];
+    
+    let result = tokio::task::spawn_blocking(move || {
+        execute_curl_command(
+            api_url,
+            "POST".to_string(),
+            headers,
+            Some(request_body.to_string())
+        )
+    })
+    .await
+    .map_err(|e| format!("执行失败: {}", e))?;
+
+    result
+}
+
 #[tauri::command]
 async fn generate_plantuml(description: String) -> Result<String, String> {
-    // 模拟 AI 生成延迟
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     
-    // 根据描述关键词生成不同类型的图表
     let desc_lower = description.to_lowercase();
     
     let plantuml = if desc_lower.contains("登录") || desc_lower.contains("认证") || desc_lower.contains("login") {
@@ -559,7 +556,6 @@ Order "*" --> "1" Product : 包含
 
 @enduml"#.to_string()
     } else {
-        // 默认流程图
         r#"@startuml
 !theme plain
 skinparam backgroundColor #FEFEFE
@@ -591,35 +587,29 @@ stop
     Ok(plantuml)
 }
 
-// ==================== Main ====================
-
 fn main() {
     tauri::Builder::default()
         .manage(AppState::new())
         .invoke_handler(generate_handler![
-            // Document commands
             save_document,
             load_document,
             list_documents,
-            // CodeHub commands
             open_codehub_window,
             close_codehub_window,
             capture_review_comments,
             add_review_comment,
             get_review_comments,
             clear_review_comments,
-            // RAG commands
             process_rag_pairs,
             get_rag_pairs,
             export_rag_data,
-            // Metrics commands
             add_metric,
             get_metrics,
             get_metrics_summary,
             clear_metrics,
-            // Template commands
-            fetch_remote_templates,
-            // AI commands
+            fetch_templates_via_command,
+            test_api_connection,
+            call_ai_api,
             generate_plantuml,
         ])
         .run(tauri::generate_context!())

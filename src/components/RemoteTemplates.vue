@@ -1,17 +1,6 @@
 <script setup lang="ts">
-/**
- * RemoteTemplates.vue - 远程模板库组件
- * 
- * 接口格式：
- * {
- *   id: string,          // 模板ID
- *   name: string,        // 模板名称
- *   description: string, // 模板简述
- *   content: string      // 模板内容
- * }
- */
-
 import { ref, onMounted, watch, computed } from 'vue';
+import { invoke } from '@tauri-apps/api/tauri';
 import { 
   Download,
   RefreshCw,
@@ -19,9 +8,10 @@ import {
   FileText,
   X,
   FolderOpen,
+  Terminal,
+  AlertCircle,
+  CheckCircle
 } from 'lucide-vue-next';
-
-// ==================== 类型定义 ====================
 
 export interface RemoteTemplate {
   id: string;
@@ -29,8 +19,6 @@ export interface RemoteTemplate {
   description: string;
   content: string;
 }
-
-// ==================== Props & Emits ====================
 
 const props = defineProps<{
   show: boolean;
@@ -42,65 +30,75 @@ const emit = defineEmits<{
   (e: 'select', template: RemoteTemplate): void;
 }>();
 
-// ==================== 响应式状态 ====================
-
 const templates = ref<RemoteTemplate[]>([]);
 const isLoading = ref(false);
 const error = ref<string | null>(null);
 const searchQuery = ref('');
 const selectedTemplate = ref<RemoteTemplate | null>(null);
 const previewMode = ref(false);
+const useCommandLine = ref(false);
+const connectionStatus = ref<'idle' | 'testing' | 'success' | 'error'>('idle');
 
-// ==================== 方法定义 ====================
-
-/**
- * 从远程加载模板列表
- */
 const loadTemplates = async () => {
   isLoading.value = true;
   error.value = null;
   
   try {
-    let allTemplates: RemoteTemplate[] = [];
-    
-    // 如果配置了远程模板源，尝试加载
-    if (props.templateUrl && props.templateUrl.trim()) {
-      try {
-        const response = await fetch(props.templateUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const remoteTemplates = await response.json() as RemoteTemplate[];
-        // 确保是数组
-        if (Array.isArray(remoteTemplates)) {
-          allTemplates = [...remoteTemplates];
-        } else {
-          console.warn('远程模板格式不正确，期望数组');
-        }
-      } catch (e) {
-        console.log('加载远程模板失败:', e);
-        error.value = '加载远程模板失败，请检查 URL 配置';
-      }
-    } else {
-      error.value = '未配置远程模板 URL';
+    if (!props.templateUrl || !props.templateUrl.trim()) {
+      error.value = '未配置远程模板 URL，请在设置中配置';
+      templates.value = [];
+      return;
     }
     
-    templates.value = allTemplates;
+    const result = await invoke('fetch_templates_via_command', { 
+      url: props.templateUrl,
+      useCommandLine: useCommandLine.value
+    }) as string;
     
-  } catch (err) {
+    try {
+      const parsed = JSON.parse(result);
+      if (Array.isArray(parsed)) {
+        templates.value = parsed;
+        error.value = null;
+      } else {
+        error.value = '远程模板格式不正确';
+        templates.value = [];
+      }
+    } catch (parseErr) {
+      error.value = '解析模板数据失败: ' + result;
+      templates.value = [];
+    }
+  } catch (err: any) {
     console.error('加载模板失败:', err);
-    error.value = '加载模板失败: ' + err;
+    error.value = err.message || '加载模板失败';
     templates.value = [];
   } finally {
     isLoading.value = false;
   }
 };
 
-// ==================== 计算属性 ====================
+const testConnection = async () => {
+  if (!props.templateUrl) {
+    alert('请先配置远程模板 URL');
+    return;
+  }
+  
+  connectionStatus.value = 'testing';
+  try {
+    const result = await invoke('test_api_connection', { url: props.templateUrl }) as string;
+    if (result === 'success') {
+      connectionStatus.value = 'success';
+      alert('连接测试成功！');
+    } else {
+      connectionStatus.value = 'error';
+      alert('连接测试失败: ' + result);
+    }
+  } catch (err: any) {
+    connectionStatus.value = 'error';
+    alert('连接测试失败: ' + err.message);
+  }
+};
 
-/**
- * 根据搜索关键词过滤模板
- */
 const filteredTemplates = computed(() => {
   if (!searchQuery.value) {
     return templates.value;
@@ -113,8 +111,6 @@ const filteredTemplates = computed(() => {
     t.id.toLowerCase().includes(query)
   );
 });
-
-// ==================== 工具函数 ====================
 
 const selectTemplate = (template: RemoteTemplate) => {
   selectedTemplate.value = template;
@@ -135,11 +131,15 @@ const closeModal = () => {
   emit('close');
 };
 
-// ==================== 生命周期 ====================
-
 onMounted(() => {
-  if (props.show) {
-    loadTemplates();
+  const saved = localStorage.getItem('app-config');
+  if (saved) {
+    try {
+      const config = JSON.parse(saved);
+      useCommandLine.value = config.useCommandLine || false;
+    } catch (e) {
+      console.error('加载配置失败:', e);
+    }
   }
 });
 
@@ -154,16 +154,9 @@ watch(() => props.show, (newVal) => {
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="show" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <!-- 背景遮罩 -->
-        <div 
-          class="absolute inset-0 bg-black/50 backdrop-blur-sm" 
-          @click="closeModal"
-        />
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeModal" />
         
-        <!-- 弹窗主体 -->
         <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          
-          <!-- 头部 -->
           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
             <div class="flex items-center gap-3">
               <div class="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl">
@@ -176,6 +169,18 @@ watch(() => props.show, (newVal) => {
             </div>
             <div class="flex items-center gap-2">
               <button
+                @click="testConnection"
+                :disabled="!templateUrl || isLoading"
+                class="p-2 hover:bg-gray-200/50 rounded-lg transition-colors"
+                title="测试连接"
+              >
+                <Terminal :size="18" :class="{
+                  'text-green-500': connectionStatus === 'success',
+                  'text-red-500': connectionStatus === 'error',
+                  'text-gray-400': connectionStatus === 'idle' || connectionStatus === 'testing'
+                }" />
+              </button>
+              <button
                 @click="loadTemplates"
                 :disabled="isLoading"
                 class="p-2 hover:bg-gray-200/50 rounded-lg transition-colors"
@@ -183,16 +188,12 @@ watch(() => props.show, (newVal) => {
               >
                 <RefreshCw :size="18" :class="isLoading ? 'animate-spin' : ''" class="text-gray-500" />
               </button>
-              <button 
-                @click="closeModal"
-                class="p-2 hover:bg-gray-200/50 rounded-lg transition-colors"
-              >
+              <button @click="closeModal" class="p-2 hover:bg-gray-200/50 rounded-lg transition-colors">
                 <X :size="20" class="text-gray-500" />
               </button>
             </div>
           </div>
           
-          <!-- 搜索区域 -->
           <div class="p-4 border-b border-gray-200 bg-gray-50/50">
             <div class="relative">
               <Search :size="18" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -205,22 +206,18 @@ watch(() => props.show, (newVal) => {
             </div>
           </div>
           
-          <!-- 内容区域 -->
           <div class="flex-1 overflow-hidden flex">
-            
-            <!-- 模板列表 -->
             <div :class="['flex-1 overflow-y-auto p-4', previewMode ? '' : 'w-full']">
-              
-              <!-- 加载中 -->
               <div v-if="isLoading" class="flex flex-col items-center justify-center h-64">
                 <RefreshCw :size="32" class="animate-spin text-blue-500 mb-4" />
                 <p class="text-gray-500">加载模板中...</p>
+                <p class="text-xs text-gray-400 mt-2" v-if="useCommandLine">正在通过命令行调用 API...</p>
               </div>
               
-              <!-- 错误状态 -->
               <div v-else-if="error" class="flex flex-col items-center justify-center h-64 text-center">
-                <FileText :size="32" class="text-gray-300 mb-4" />
-                <p class="text-red-600 mb-2">{{ error }}</p>
+                <AlertCircle :size="32" class="text-amber-500 mb-4" />
+                <p class="text-gray-800 mb-2">{{ error }}</p>
+                <p class="text-xs text-gray-400 mb-4" v-if="useCommandLine">请检查命令行调用配置</p>
                 <button
                   @click="loadTemplates"
                   class="text-blue-600 hover:underline"
@@ -229,14 +226,12 @@ watch(() => props.show, (newVal) => {
                 </button>
               </div>
               
-              <!-- 空状态 -->
               <div v-else-if="filteredTemplates.length === 0" class="flex flex-col items-center justify-center h-64 text-center">
                 <FileText :size="32" class="text-gray-300 mb-4" />
                 <p class="text-gray-500">没有找到模板</p>
                 <p class="text-xs text-gray-400 mt-2">请检查远程模板 URL 配置</p>
               </div>
               
-              <!-- 模板列表 -->
               <div v-else class="grid grid-cols-2 gap-3">
                 <div
                   v-for="template in filteredTemplates"
@@ -249,17 +244,13 @@ watch(() => props.show, (newVal) => {
                       : 'border-gray-200 hover:border-blue-300'
                   ]"
                 >
-                  <!-- 模板名称 -->
                   <h3 class="font-semibold text-gray-800 mb-1">{{ template.name }}</h3>
-                  <!-- 模板ID -->
                   <p class="text-xs text-gray-400 mb-2">ID: {{ template.id }}</p>
-                  <!-- 模板描述 -->
                   <p class="text-sm text-gray-500 line-clamp-2">{{ template.description }}</p>
                 </div>
               </div>
             </div>
             
-            <!-- 预览面板 -->
             <div 
               v-if="previewMode && selectedTemplate"
               class="w-96 border-l border-gray-200 bg-gray-50 flex flex-col animate-slide-in"
@@ -275,21 +266,26 @@ watch(() => props.show, (newVal) => {
                 <p class="text-xs text-gray-400 mb-3">ID: {{ selectedTemplate.id }}</p>
                 <p class="text-sm text-gray-500 mb-4">{{ selectedTemplate.description }}</p>
                 
-                <!-- 内容预览 -->
                 <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
-                  <pre class="text-xs text-gray-600 overflow-auto max-h-64 whitespace-pre-wrap">{{ selectedTemplate.content.substring(0, 500) }}{{ selectedTemplate.content.length > 500 ? '...' : '' }}</pre>
+                  <pre class="text-xs text-gray-600 overflow-auto max-h-64 whitespace-pre-wrap">{{ selectedTemplate.content.substring(0, 1000) }}{{ selectedTemplate.content.length > 1000 ? '\n...(内容截断)' : '' }}</pre>
                 </div>
                 
-                <!-- 使用按钮 -->
                 <button
                   @click="confirmUseTemplate"
                   class="w-full py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:opacity-90 transition-all flex items-center justify-center gap-2"
                 >
-                  <Download :size="18" />
+                  <CheckCircle :size="18" />
                   使用此模板
                 </button>
               </div>
             </div>
+          </div>
+          
+          <div v-if="!templateUrl" class="px-4 py-3 border-t border-gray-200 bg-amber-50">
+            <p class="text-xs text-amber-700 flex items-center gap-2">
+              <AlertCircle :size="14" />
+              未配置远程模板 URL，请先在设置中配置
+            </p>
           </div>
         </div>
       </div>
